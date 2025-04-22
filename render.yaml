@@ -8,6 +8,6 @@ services:
     startCommand: python main.py
     envVars:
       - key: BOT_TOKEN
-        value: your-telegram-bot-token-here
+        value: 7511704960:AAH-rIBOQkhzYvTVOp2tiodxzK3vp8GUiYM
       - key: WEBHOOK_URL
-        value: https://your-app-name.onrender.com
+        value: https://telegram-pdf-bot-tqm5.onrender.com
