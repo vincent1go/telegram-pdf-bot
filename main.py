@@ -40,6 +40,10 @@ error_logger = logging.FileHandler("errors.log")
 error_logger.setLevel(logging.ERROR)
 logging.getLogger().addHandler(error_logger)
 
+# === AsyncIO loop для Flask ===
+loop = asyncio.new_event_loop()
+asyncio.set_event_loop(loop)
+
 # === Вспомогательные функции ===
 def get_template_name_by_path(path):
     for name, file in TEMPLATES.items():
@@ -150,7 +154,7 @@ def home():
 @web_app.route(f'/{TOKEN}', methods=["POST"])
 def webhook():
     update = Update.de_json(request.get_json(force=True), application.bot)
-    asyncio.create_task(application.process_update(update))
+    loop.call_soon_threadsafe(asyncio.create_task, application.process_update(update))
     return "OK"
 
 # === Создание приложения Telegram ===
@@ -168,4 +172,5 @@ async def main():
 
 if __name__ == "__main__":
     threading.Thread(target=lambda: web_app.run(host="0.0.0.0", port=10000)).start()
-    asyncio.run(main())
+    loop.run_until_complete(main())
+
