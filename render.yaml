@@ -9,9 +9,9 @@ services:
     autoDeploy: false
     envVars:
       - key: BOT_TOKEN
-        sync: false  # Установи вручную в Render Dashboard
+        sync: false
       - key: ADMIN_ID
-        sync: false  # Тоже установи вручную
+        sync: false
       - key: WEBHOOK_URL
         value: "https://telegram-pdf-bot-1f5c.onrender.com/telegram"
     runtimeEnvVars:
