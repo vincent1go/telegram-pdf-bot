@@ -86,7 +86,10 @@ async def template_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def handle_template_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
-    await query.answer()
+    try:
+        await query.answer()
+    except Exception as e:
+        logger.warning(f"Ошибка при ответе на callback query: {e}")
     keyboard = [[InlineKeyboardButton(text=label, callback_data=label)] for label in TEMPLATES.keys()]
     await query.edit_message_text("Выберите шаблон:", reply_markup=InlineKeyboardMarkup(keyboard))
 
