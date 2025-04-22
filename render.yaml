@@ -11,12 +11,11 @@ services:
     envVars:
       - key: BOT_TOKEN
         value: 7511704960:AAH-rIBOQkhzYvTVOp2tiodxzK3vp8GUiYM
-      - key: WEBHOOK_URL
-        value: https://telegram-pdf-bot-1f5c.onrender.com/telegram
       - key: ADMIN_ID
         value: "6587507343"
+      - key: WEBHOOK_URL
+        value: https://telegram-pdf-bot-1f5c.onrender.com/telegram
 
     runtimeEnvVars:
       - key: PORT
         value: "8080"
-
