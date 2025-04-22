@@ -96,7 +96,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_document(document=InputFile(f, filename=output_path))
     keyboard = [[InlineKeyboardButton("Выбрать другой шаблон", callback_data="choose_template")]]
     await update.message.reply_text(
-        f"Договор на имя "{client_name}" сгенерирован.",
+        f'Договор на имя "{client_name}" сгенерирован.',
         reply_markup=InlineKeyboardMarkup(keyboard)
     )
     os.remove(output_path)
