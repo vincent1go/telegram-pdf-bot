@@ -1,182 +1,210 @@
-import os
-import re
-import pytz
-import fitz  # PyMuPDF
 import logging
-import asyncio
-from datetime import datetime
-from aiohttp import web
-from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
-    ApplicationBuilder, ContextTypes, CommandHandler,
-    MessageHandler, CallbackQueryHandler, filters
+    Application,
+    CommandHandler,
+    CallbackQueryHandler,
+    MessageHandler,
+    filters,
+    ContextTypes,
 )
+import config
+from pdf_generator import generate_pdf
 
-# === Конфигурация ===
-TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
-WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PORT = int(os.environ.get("PORT", 8080))
-
-TEMPLATES = {
-    "UR Recruitment LTD": "clean_template_no_text.pdf",
-    "SMALL WORLD RECRUITMENT LTD": "template_small_world.pdf"
-}
-
-COLOR = (69 / 255, 69 / 255, 69 / 255)
-
-# === Логирование ===
+# Enable logging
 logging.basicConfig(
-    level=logging.INFO,
-    format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler("bot.log")
-    ]
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# === Telegram Application ===
-telegram_app = ApplicationBuilder().token(TOKEN).build()
+# User states
+SELECTING_TEMPLATE = 1
+ENTERING_TEXT = 2
 
-# === Вспомогательные функции ===
-def get_london_date():
-    return datetime.now(pytz.timezone("Europe/London")).strftime("%d.%m.%Y")
+async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle /start command with a welcoming message and navigation buttons."""
+    welcome_message = (
+        "👋 *Welcome to the PDF Generator Bot!* 🚀\n\n"
+        "I help you create PDFs from predefined templates by filling them with your text.\n\n"
+        "*How it works:*\n"
+        "- Select a template from the list.\n"
+        "- Provide the text to fill the template.\n"
+        "- Receive a customized PDF file! 📄\n\n"
+        "Let's get started!"
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("📄 Select Template", callback_data="select_template"),
+            InlineKeyboardButton("ℹ️ About Bot", callback_data="about"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await update.message.reply_text(welcome_message, parse_mode="Markdown", reply_markup=reply_markup)
 
-def get_template_name_by_path(path):
-    for name, file in TEMPLATES.items():
-        if file == path:
-            return name
-    return "Неизвестно"
-
-def replace_text(page, old_text, new_text):
-    areas = page.search_for(old_text)
-    for area in areas:
-        page.add_redact_annot(area, fill=(1, 1, 1))
-    page.apply_redactions()
-    for area in areas:
-        y_offset = 8 if "Date" in old_text else 0
-        page.insert_text(
-            (area.x0, area.y0 + y_offset),
-            new_text,
-            fontname="helv",
-            fontsize=11,
-            color=COLOR
-        )
-
-def fill_pdf_template(template_path, output_path, client_name, date_str):
-    doc = fitz.open(template_path)
-    for page in doc:
-        replace_text(page, "Client:", f"Client: {client_name}")
-        replace_text(page, "Date:", f"Date: {date_str}")
-    doc.save(output_path, garbage=4, deflate=True, clean=True)
-    doc.close()
-
-# === Telegram Handlers ===
-async def set_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(text=label, callback_data=label)] for label in TEMPLATES.keys()]
-    await update.message.reply_text("Выберите шаблон:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def template_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle 'About Bot' button with bot info and a back button."""
     query = update.callback_query
     await query.answer()
-    selected = query.data
-    context.user_data['template'] = TEMPLATES[selected]
-    await query.edit_message_text(f"Шаблон выбран: {selected}")
+    about_message = (
+        "ℹ️ *About PDF Generator Bot*\n\n"
+        "This bot creates PDFs from templates using your input text. 📄\n"
+        "Built with ❤️ by [Your Name].\n"
+        "Source: [GitHub](https://github.com/vincent1go/telegram-pdf-bot)\n\n"
+        "Ready to create a PDF? Let's go back to the menu! 🔄"
+    )
+    keyboard = [[InlineKeyboardButton("🏠 Back to Menu", callback_data="main_menu")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.message.edit_text(about_message, parse_mode="Markdown", reply_markup=reply_markup, disable_web_page_preview=True)
 
-async def handle_template_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Return to the main menu with the welcome message."""
     query = update.callback_query
-    try:
-        await query.answer()
-    except Exception as e:
-        logger.warning(f"Ошибка при ответе на callback query: {e}")
-    keyboard = [[InlineKeyboardButton(text=label, callback_data=label)] for label in TEMPLATES.keys()]
-    await query.edit_message_text("Выберите шаблон:", reply_markup=InlineKeyboardMarkup(keyboard))
+    await query.answer()
+    welcome_message = (
+        "👋 *Welcome back to the PDF Generator Bot!* 🚀\n\n"
+        "Choose an option to continue:"
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("📄 Select Template", callback_data="select_template"),
+            InlineKeyboardButton("ℹ️ About Bot", callback_data="about"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.message.edit_text(welcome_message, parse_mode="Markdown", reply_markup=reply_markup)
 
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    client_name = update.message.text.strip()
-    safe_name = re.sub(r"[^\w\s-]", "", client_name, flags=re.UNICODE).strip()
-    template_path = context.user_data.get('template')
-    if not template_path:
-        await update.message.reply_text("Сначала выберите шаблон через /template")
-        return
-    output_path = f"{safe_name}.pdf"
-    try:
-        fill_pdf_template(template_path, output_path, safe_name, get_london_date())
-        with open(output_path, "rb") as f:
-            await update.message.reply_document(document=InputFile(f, filename=output_path))
-        keyboard = [[InlineKeyboardButton("Выбрать другой шаблон", callback_data="choose_template")]]
-        await update.message.reply_text(
-            f'Договор на имя "{client_name}" сгенерирован.',
-            reply_markup=InlineKeyboardMarkup(keyboard)
+async def select_template(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Display template selection with a compact inline keyboard."""
+    query = update.callback_query
+    await query.answer()
+    message = "*📄 Choose a Template*\n\nSelect a template to start creating your PDF:"
+    keyboard = []
+    template_names = list(config.TEMPLATES.keys())
+    # Create two buttons per row
+    for i in range(0, len(template_names), 2):
+        row = [
+            InlineKeyboardButton(f"📄 {template_names[i]}", callback_data=f"template_{template_names[i]}")
+        ]
+        if i + 1 < len(template_names):
+            row.append(InlineKeyboardButton(f"📄 {template_names[i+1]}", callback_data=f"template_{template_names[i+1]}"))
+        keyboard.append(row)
+    keyboard.append([InlineKeyboardButton("❌ Cancel", callback_data="cancel")])
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.message.edit_text(message, parse_mode="Markdown", reply_markup=reply_markup)
+    context.user_data["state"] = SELECTING_TEMPLATE
+
+async def template_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle template selection and prompt for text input."""
+    query = update.callback_query
+    await query.answer()
+    template_name = query.data.replace("template_", "")
+    if template_name not in config.TEMPLATES:
+        await query.message.edit_text(
+            "⚠️ *Error*: Invalid template selected.\n\nPlease choose a valid template.",
+            parse_mode="Markdown"
         )
-    except Exception as e:
-        logger.error(f"Ошибка при генерации PDF: {e}")
-        await update.message.reply_text("Произошла ошибка при генерации документа. Попробуйте снова.")
-    finally:
-        if os.path.exists(output_path):
-            os.remove(output_path)
+        return
+    context.user_data["template"] = template_name
+    message = (
+        f"✅ *Template Selected*: {template_name}\n\n"
+        "📝 Please send the text to fill the template.\n"
+        "Make sure your text matches the template's requirements.\n\n"
+        "You can also start over if needed."
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Start Over", callback_data="select_template"),
+            InlineKeyboardButton("❌ Cancel", callback_data="cancel"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.message.edit_text(message, parse_mode="Markdown", reply_markup=reply_markup)
+    context.user_data["state"] = ENTERING_TEXT
 
-# === Webhook Handler ===
-async def telegram_webhook(request):
+async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle cancellation and return to main menu."""
+    query = update.callback_query
+    await query.answer()
+    context.user_data.clear()
+    message = "❌ *Operation Cancelled*\n\nChoose an option to continue:"
+    keyboard = [
+        [
+            InlineKeyboardButton("📄 Select Template", callback_data="select_template"),
+            InlineKeyboardButton("ℹ️ About Bot", callback_data="about"),
+        ]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await query.message.edit_text(message, parse_mode="Markdown", reply_markup=reply_markup)
+
+async def receive_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle text input and generate PDF."""
+    if context.user_data.get("state") != ENTERING_TEXT:
+        await update.message.reply_text(
+            "⚠️ *Error*: Please select a template first using the menu.",
+            parse_mode="Markdown"
+        )
+        return
+    text = update.message.text
+    template_name = context.user_data.get("template")
+    template_path = config.TEMPLATES.get(template_name)
     try:
-        data = await request.json()
-        update = Update.de_json(data, telegram_app.bot)
-        if update:
-            await telegram_app.process_update(update)
-            return web.json_response({"status": "ok"})
-        else:
-            logger.warning("Получен пустой или некорректный update")
-            return web.json_response({"status": "error", "message": "Invalid update"}, status=400)
+        pdf_path = generate_pdf(template_path, text)
+        with open(pdf_path, "rb") as file:
+            await update.message.reply_document(
+                document=file,
+                caption=f"✅ *Your PDF is ready!* 🎉\n\nTemplate: {template_name}",
+                parse_mode="Markdown"
+            )
+        message = (
+            "🚀 *PDF Generated Successfully!*\n\n"
+            "Would you like to create another PDF or learn more about the bot?"
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton("📄 Select Template", callback_data="select_template"),
+                InlineKeyboardButton("ℹ️ About Bot", callback_data="about"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(message, parse_mode="Markdown", reply_markup=reply_markup)
+        context.user_data.clear()
     except Exception as e:
-        logger.error(f"Ошибка в вебхуке: {e}")
-        return web.json_response({"status": "error", "message": str(e)}, status=500)
+        logger.error(f"Error generating PDF: {e}")
+        message = (
+            "❌ *Error*: Failed to generate PDF.\n\n"
+            f"Details: {str(e)}\n\n"
+            "Please try again or select a different template."
+        )
+        keyboard = [
+            [
+                InlineKeyboardButton("🔄 Start Over", callback_data="select_template"),
+                InlineKeyboardButton("❌ Cancel", callback_data="cancel"),
+            ]
+        ]
+        reply_markup = InlineKeyboardMarkup(keyboard)
+        await update.message.reply_text(message, parse_mode="Markdown", reply_markup=reply_markup)
 
-async def home(request):
-    return web.Response(text="Bot is alive!")
+async def error_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Log errors and notify user."""
+    logger.error(f"Update {update} caused error {context.error}")
+    if update.message:
+        await update.message.reply_text(
+            "⚠️ *Error*: Something went wrong.\n\nPlease try again or contact support.",
+            parse_mode="Markdown"
+        )
 
-# === Запуск ===
-async def main():
-    try:
-        # Настройка обработчиков
-        telegram_app.add_handler(CommandHandler("template", set_template))
-        telegram_app.add_handler(CallbackQueryHandler(handle_template_switch, pattern="choose_template"))
-        telegram_app.add_handler(CallbackQueryHandler(template_callback))
-        telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-        # Инициализация приложения
-        await telegram_app.initialize()
-        logger.info(f"Установка вебхука: {WEBHOOK_URL}")
-
-        # Установка вебхука
-        webhook_info = await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
-        logger.info(f"Вебхук установлен: {webhook_info}")
-
-        # Запуск Telegram приложения
-        await telegram_app.start()
-
-        # Настройка aiohttp сервера
-        app = web.Application()
-        app.router.add_post("/telegram", telegram_webhook)
-        app.router.add_get("/", home)
-
-        # Запуск сервера
-        runner = web.AppRunner(app)
-        await runner.setup()
-        site = web.TCPSite(runner, "0.0.0.0", PORT)
-        await site.start()
-        logger.info(f"Сервер запущен на порту {PORT}")
-
-        # Держим приложение запущенным
-        while True:
-            await asyncio.sleep(3600)
-
-    except Exception as e:
-        logger.error(f"Ошибка при запуске бота: {e}")
-        raise
-    finally:
-        await telegram_app.stop()
-        await telegram_app.shutdown()
+def main() -> None:
+    """Run the bot."""
+    application = Application.builder().token(config.BOT_TOKEN).build()
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(CallbackQueryHandler(select_template, pattern="select_template"))
+    application.add_handler(CallbackQueryHandler(main_menu, pattern="main_menu"))
+    application.add_handler(CallbackQueryHandler(about, pattern="about"))
+    application.add_handler(CallbackQueryHandler(cancel, pattern="cancel"))
+    application.add_handler(CallbackQueryHandler(template_selected, pattern="template_.*"))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, receive_text))
+    application.add_error_handler(error_handler)
+    application.run_polling()
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    main()
