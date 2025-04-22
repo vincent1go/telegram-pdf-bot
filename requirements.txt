@@ -4,6 +4,4 @@ pytz
 PyMuPDF
 flask
 
-fitz
-telegram
 requests
