@@ -3,15 +3,19 @@ services:
     name: telegram-pdf-bot
     env: python
     plan: free
-    buildCommand: pip install -r requirements.txt
-    startCommand: python main.py
+    region: frankfurt
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main.py"
+    autoDeploy: false
     envVars:
       - key: BOT_TOKEN
         value: 7511704960:AAH-rIBOQkhzYvTVOp2tiodxzK3vp8GUiYM
-        sync: false
       - key: WEBHOOK_URL
-        value: https://telegram-pdf-bot-tqm5.onrender.com
-        sync: false
+        value: https://telegram-pdf-bot-1f5c.onrender.com/telegram
       - key: ADMIN_ID
-        value: 6587507343
-        sync: false
+        value: "6587507343"
+    runtimeEnvVars:
+      - key: PORT
+        value: "8080"
+
+
