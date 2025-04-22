@@ -1,0 +1,9 @@
+python-telegram-bot==20.0
+PyPDF2==3.0.1
+pytz
+PyMuPDF
+flask
+
+fitz
+telegram
+requests
