@@ -7,15 +7,13 @@ services:
     buildCommand: "pip install -r requirements.txt"
     startCommand: "python main.py"
     autoDeploy: false
-
     envVars:
       - key: BOT_TOKEN
-        value: 7511704960:AAH-rIBOQkhzYvTVOp2tiodxzK3vp8GUiYM
+        sync: false  # Установи вручную в Render Dashboard
       - key: ADMIN_ID
-        value: "6587507343"
+        sync: false  # Тоже установи вручную
       - key: WEBHOOK_URL
-        value: https://telegram-pdf-bot-1f5c.onrender.com/telegram
-
+        value: "https://telegram-pdf-bot-1f5c.onrender.com/telegram"
     runtimeEnvVars:
       - key: PORT
         value: "8080"
