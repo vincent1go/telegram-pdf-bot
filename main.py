@@ -1,4 +1,3 @@
-
 import os
 import re
 import pytz
@@ -6,8 +5,7 @@ import fitz  # PyMuPDF
 import logging
 import asyncio
 from datetime import datetime
-from flask import Flask, request
-from threading import Thread
+from flask import Flask, request, jsonify
 from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ApplicationBuilder, ContextTypes, CommandHandler,
@@ -18,6 +16,7 @@ from telegram.ext import (
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+PORT = int(os.environ.get("PORT", 8080))
 
 TEMPLATES = {
     "UR Recruitment LTD": "clean_template_no_text.pdf",
@@ -27,7 +26,15 @@ TEMPLATES = {
 COLOR = (69 / 255, 69 / 255, 69 / 255)
 
 # === Логирование ===
-logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler("bot.log")  # Сохраняем логи в файл
+    ]
+)
+logger = logging.getLogger(__name__)
 
 # === Telegram и Flask ===
 telegram_app = ApplicationBuilder().token(TOKEN).build()
@@ -92,42 +99,64 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("Сначала выберите шаблон через /template")
         return
     output_path = f"{safe_name}.pdf"
-    fill_pdf_template(template_path, output_path, safe_name, get_london_date())
-    with open(output_path, "rb") as f:
-        await update.message.reply_document(document=InputFile(f, filename=output_path))
-    keyboard = [[InlineKeyboardButton("Выбрать другой шаблон", callback_data="choose_template")]]
-    await update.message.reply_text(
-        f'Договор на имя "{client_name}" сгенерирован.',
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-    os.remove(output_path)
+    try:
+        fill_pdf_template(template_path, output_path, safe_name, get_london_date())
+        with open(output_path, "rb") as f:
+            await update.message.reply_document(document=InputFile(f, filename=output_path))
+        keyboard = [[InlineKeyboardButton("Выбрать другой шаблон", callback_data="choose_template")]]
+        await update.message.reply_text(
+            f'Договор на имя "{client_name}" сгенерирован.',
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
+    except Exception as e:
+        logger.error(f"Ошибка при генерации PDF: {e}")
+        await update.message.reply_text("Произошла ошибка при генерации документа. Попробуйте снова.")
+    finally:
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
 # === Flask Webhook Endpoint ===
 @flask_app.route("/telegram", methods=["POST"])
 def telegram_webhook():
-    update = Update.de_json(request.get_json(force=True), telegram_app.bot)
-    telegram_app.update_queue.put_nowait(update)
-    return "OK", 200
+    try:
+        if request.content_type != "application/json":
+            logger.warning("Получен запрос с неверным типом контента")
+            return jsonify({"status": "error", "message": "Expected application/json"}), 400
+        update = Update.de_json(request.get_json(), telegram_app.bot)
+        if update:
+            asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), asyncio.get_event_loop())
+            return jsonify({"status": "ok"}), 200
+        else:
+            logger.warning("Получен пустой или некорректный update")
+            return jsonify({"status": "error", "message": "Invalid update"}), 400
+    except Exception as e:
+        logger.error(f"Ошибка в вебхуке: {e}")
+        return jsonify({"status": "error", "message": str(e)}), 500
 
 @flask_app.route("/")
 def home():
     return "Bot is alive!", 200
 
 # === Запуск ===
-def run_flask():
-    flask_app.run(host="0.0.0.0", port=int(os.environ.get("PORT", 8080)))
-
 async def main():
-    telegram_app.add_handler(CommandHandler("template", set_template))
-    telegram_app.add_handler(CallbackQueryHandler(handle_template_switch, pattern="choose_template"))
-    telegram_app.add_handler(CallbackQueryHandler(template_callback))
-    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    try:
+        telegram_app.add_handler(CommandHandler("template", set_template))
+        telegram_app.add_handler(CallbackQueryHandler(handle_template_switch, pattern="choose_template"))
+        telegram_app.add_handler(CallbackQueryHandler(template_callback))
+        telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-    await telegram_app.initialize()
-    await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
-    Thread(target=run_flask, daemon=True).start()
-    await telegram_app.start()
-    await telegram_app.wait_until_closed()
+        await telegram_app.initialize()
+        logger.info(f"Установка вебхука: {WEBHOOK_URL}")
+        webhook_info = await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
+        logger.info(f"Вебхук установлен: {webhook_info}")
+        await telegram_app.start()
+
+        # Запускаем Flask в основном потоке
+        flask_app.run(host="0.0.0.0", port=PORT)
+    except Exception as e:
+        logger.error(f"Ошибка при запуске бота: {e}")
+        raise
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
