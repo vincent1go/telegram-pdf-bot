@@ -5,7 +5,7 @@ import fitz  # PyMuPDF
 import logging
 import asyncio
 from datetime import datetime
-from flask import Flask, request, jsonify
+from aiohttp import web
 from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ApplicationBuilder, ContextTypes, CommandHandler,
@@ -31,14 +31,13 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
     handlers=[
         logging.StreamHandler(),
-        logging.FileHandler("bot.log")  # Сохраняем логи в файл
+        logging.FileHandler("bot.log")
     ]
 )
 logger = logging.getLogger(__name__)
 
-# === Telegram и Flask ===
+# === Telegram Application ===
 telegram_app = ApplicationBuilder().token(TOKEN).build()
-flask_app = Flask(__name__)
 
 # === Вспомогательные функции ===
 def get_london_date():
@@ -115,48 +114,66 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if os.path.exists(output_path):
             os.remove(output_path)
 
-# === Flask Webhook Endpoint ===
-@flask_app.route("/telegram", methods=["POST"])
-def telegram_webhook():
+# === Webhook Handler ===
+async def telegram_webhook(request):
     try:
-        if request.content_type != "application/json":
-            logger.warning("Получен запрос с неверным типом контента")
-            return jsonify({"status": "error", "message": "Expected application/json"}), 400
-        update = Update.de_json(request.get_json(), telegram_app.bot)
+        data = await request.json()
+        update = Update.de_json(data, telegram_app.bot)
         if update:
-            asyncio.run_coroutine_threadsafe(telegram_app.process_update(update), asyncio.get_event_loop())
-            return jsonify({"status": "ok"}), 200
+            await telegram_app.process_update(update)
+            return web.json_response({"status": "ok"})
         else:
             logger.warning("Получен пустой или некорректный update")
-            return jsonify({"status": "error", "message": "Invalid update"}), 400
+            return web.json_response({"status": "error", "message": "Invalid update"}, status=400)
     except Exception as e:
         logger.error(f"Ошибка в вебхуке: {e}")
-        return jsonify({"status": "error", "message": str(e)}), 500
+        return web.json_response({"status": "error", "message": str(e)}, status=500)
 
-@flask_app.route("/")
-def home():
-    return "Bot is alive!", 200
+async def home(request):
+    return web.Response(text="Bot is alive!")
 
 # === Запуск ===
 async def main():
     try:
+        # Настройка обработчиков
         telegram_app.add_handler(CommandHandler("template", set_template))
         telegram_app.add_handler(CallbackQueryHandler(handle_template_switch, pattern="choose_template"))
         telegram_app.add_handler(CallbackQueryHandler(template_callback))
         telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
+        # Инициализация приложения
         await telegram_app.initialize()
         logger.info(f"Установка вебхука: {WEBHOOK_URL}")
+
+        # Установка вебхука
         webhook_info = await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
         logger.info(f"Вебхук установлен: {webhook_info}")
+
+        # Запуск Telegram приложения
         await telegram_app.start()
 
-        # Запускаем Flask в основном потоке
-        flask_app.run(host="0.0.0.0", port=PORT)
+        # Настройка aiohttp сервера
+        app = web.Application()
+        app.router.add_post("/telegram", telegram_webhook)
+        app.router.add_get("/", home)
+
+        # Запуск сервера
+        runner = web.AppRunner(app)
+        await runner.setup()
+        site = web.TCPSite(runner, "0.0.0.0", PORT)
+        await site.start()
+        logger.info(f"Сервер запущен на порту {PORT}")
+
+        # Держим приложение запущенным
+        while True:
+            await asyncio.sleep(3600)
+
     except Exception as e:
         logger.error(f"Ошибка при запуске бота: {e}")
         raise
+    finally:
+        await telegram_app.stop()
+        await telegram_app.shutdown()
 
 if __name__ == "__main__":
-    loop = asyncio.get_event_loop()
-    loop.run_until_complete(main())
+    asyncio.run(main())
