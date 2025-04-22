@@ -13,9 +13,9 @@ services:
       - key: ADMIN_ID
         sync: false
       - key: WEBHOOK_URL
-        value: "https://telegram-pdf-bot-1f5c.onrender.com/telegram" # Исправьте домен, если нужно
+        value: "https://telegram-pdf-bot-zu70.onrender.com/telegram" # Исправьте домен, если нужно
       - key: PYTHON_VERSION
-        value: "3.10" # Явно укажите версию Python
+        value: "3.10"
     runtimeEnvVars:
       - key: PORT
         value: "8080"
