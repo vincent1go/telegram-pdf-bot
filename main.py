@@ -3,20 +3,19 @@ import re
 import logging
 import pytz
 from datetime import datetime
-from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
-from telegram.ext import (ApplicationBuilder, CommandHandler, MessageHandler,
-                          ContextTypes, filters, CallbackQueryHandler)
+from flask import Flask, request
+from telegram import Update, InputFile, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.ext import (
+    ApplicationBuilder, ContextTypes, MessageHandler,
+    CallbackQueryHandler, filters
+)
 import fitz  # PyMuPDF
-from flask import Flask, request, abort
 import asyncio
 
 # === Конфигурация ===
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
-PORT = int(os.environ.get("PORT", 8080))
-if not TOKEN or not WEBHOOK_URL:
-    raise ValueError("Переменные BOT_TOKEN и WEBHOOK_URL должны быть заданы!")
+ADMIN_ID = os.getenv("ADMIN_ID")
 
 TEMPLATES = {
     "UR Recruitment LTD": "clean_template_no_text.pdf",
@@ -24,25 +23,34 @@ TEMPLATES = {
 }
 
 COLOR = (69/255, 69/255, 69/255)
-FONT_PATH = "fonts/times.ttf"
+FONT_NAME = "helv"
 
 # === Логирование ===
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("bot.log"),
-        logging.StreamHandler()
-    ]
-)
+logging.basicConfig(level=logging.INFO)
 
-error_logger = logging.FileHandler("errors.log")
-error_logger.setLevel(logging.ERROR)
-logging.getLogger().addHandler(error_logger)
+# === Telegram-приложение ===
+app = ApplicationBuilder().token(TOKEN).build()
+bot = app.bot
 
-# === Вспомогательные функции ===
+# === Flask-приложение ===
+web_app = Flask(__name__)
+
+# === Маршрут для Webhook ===
+@web_app.route("/telegram", methods=["POST"])
+def telegram_webhook():
+    update = Update.de_json(request.get_json(force=True), bot)
+    asyncio.run(app.process_update(update))
+    return "ok"
+
+# === Утилиты ===
 def get_london_date():
     return datetime.now(pytz.timezone("Europe/London")).strftime("%d.%m.%Y")
+
+def get_template_name_by_path(path):
+    for name, file in TEMPLATES.items():
+        if file == path:
+            return name
+    return "Неизвестно"
 
 def replace_text(page, old_text, new_text):
     areas = page.search_for(old_text)
@@ -52,115 +60,87 @@ def replace_text(page, old_text, new_text):
     for area in areas:
         y_offset = 8 if "Date" in old_text else 0
         page.insert_text(
-            (area.x0, area.y0 + y_offset), new_text,
-            fontname="helv",
+            (area.x0, area.y0 + y_offset),
+            new_text,
+            fontname=FONT_NAME,
             fontsize=11,
             color=COLOR
         )
 
 def fill_pdf_template(template_path, output_path, client_name, date_str):
+    doc = fitz.open(template_path)
+    for page in doc:
+        replace_text(page, "Client:", f"Client: {client_name}")
+        replace_text(page, "Date:", f"Date: {date_str}")
+    doc.save(output_path, garbage=4, deflate=True, clean=True)
+    doc.close()
+
+# === Обработчики ===
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    client_name = update.message.text.strip()
+    safe_name = re.sub(r'[^\w\s-]', '', client_name, flags=re.UNICODE).strip()
+    if not safe_name:
+        await update.message.reply_text("Неверное имя клиента.")
+        return
+
+    template_path = context.user_data.get("template")
+    if not template_path:
+        await ask_template_choice(update, context)
+        return
+
+    output_path = f"{safe_name}.pdf"
     try:
-        doc = fitz.open(template_path)
-        for page in doc:
-            replace_text(page, "Client:", f"Client: {client_name}")
-            replace_text(page, "Date:", f"Date: {date_str}")
-        doc.save(output_path, garbage=4, deflate=True, clean=True)
-        doc.close()
-        if not os.path.exists(output_path) or os.path.getsize(output_path) == 0:
-            raise ValueError("Файл PDF не создан или пуст.")
+        fill_pdf_template(template_path, output_path, safe_name, get_london_date())
+
+        with open(output_path, "rb") as f:
+            await update.message.reply_document(InputFile(f, filename=output_path))
+
+        keyboard = [
+            [InlineKeyboardButton("Выбрать другой шаблон", callback_data="choose_template")]
+        ]
+        await update.message.reply_text(
+            f"Договор на имя \"{client_name}\" сгенерирован.\n\n"
+            f"Текущий шаблон: {get_template_name_by_path(template_path)}",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     except Exception as e:
-        logging.error(f"Ошибка при замене текста в PDF: {e}")
-        raise
+        logging.error(f"Ошибка PDF: {e}")
+        await update.message.reply_text("Произошла ошибка. Попробуйте позже.")
+        if ADMIN_ID:
+            await context.bot.send_message(chat_id=int(ADMIN_ID), text=f"Ошибка у {update.effective_user.id}: {e}")
+    finally:
+        if os.path.exists(output_path):
+            os.remove(output_path)
 
-async def notify_admin(context, message):
-    if ADMIN_ID:
-        try:
-            await context.bot.send_message(chat_id=int(ADMIN_ID), text=message)
-        except Exception as e:
-            logging.error(f"Ошибка уведомления админа: {e}")
+async def ask_template_choice(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    keyboard = [[InlineKeyboardButton(name, callback_data=name)] for name in TEMPLATES]
+    if update.message:
+        await update.message.reply_text("Выберите шаблон:", reply_markup=InlineKeyboardMarkup(keyboard))
+    elif update.callback_query:
+        await update.callback_query.edit_message_text("Выберите шаблон:", reply_markup=InlineKeyboardMarkup(keyboard))
 
-# === Обработчики Telegram ===
-async def set_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(text=label, callback_data=label)] for label in TEMPLATES.keys()]
-    await update.message.reply_text("Выберите шаблон:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def template_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def handle_template_selection(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
     selected = query.data
-    context.user_data['template'] = TEMPLATES[selected]
-    await query.edit_message_text(f"Шаблон выбран: {selected}")
-
-async def handle_template_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [[InlineKeyboardButton(text=label, callback_data=label)] for label in TEMPLATES.keys()]
-    await query.edit_message_text("Выберите шаблон:", reply_markup=InlineKeyboardMarkup(keyboard))
-
-async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    client_name = update.message.text.strip()
-    if not client_name:
-        await update.message.reply_text("Пожалуйста, введите имя клиента.")
+    if selected == "choose_template":
+        await ask_template_choice(update, context)
         return
-    try:
-        safe_name = re.sub(r'[^\w\s-]', '', client_name, flags=re.UNICODE).strip()
-        if not safe_name:
-            await update.message.reply_text("Имя клиента содержит недопустимые символы.")
-            return
-        template_path = context.user_data.get('template')
-        if not template_path:
-            await update.message.reply_text("Сначала выберите шаблон через /template")
-            return
-        output_path = f"{safe_name}.pdf"
-        fill_pdf_template(template_path, output_path, safe_name, get_london_date())
-        with open(output_path, "rb") as f:
-            await update.message.reply_document(document=InputFile(f, filename=output_path))
-        keyboard = [[InlineKeyboardButton("Выбрать другой шаблон", callback_data="choose_template")]]
-        await update.message.reply_text(
-            f"Договор на имя \"{client_name}\" сгенерирован.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
-        )
-        os.remove(output_path)
-        logging.info(f"Сгенерирован PDF для: {client_name}")
-    except Exception as e:
-        logging.error(f"Ошибка: {e}")
-        await notify_admin(context, f"Ошибка у {update.effective_user.id}: {e}")
-        await update.message.reply_text("Произошла ошибка. Попробуйте позже.")
+    context.user_data["template"] = TEMPLATES[selected]
+    await query.edit_message_text(f"Выбран шаблон: {selected}")
 
-# === Flask сервер (Webhook endpoint) ===
-web_app = Flask(__name__)
+# === Регистрация обработчиков ===
+app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+app.add_handler(CallbackQueryHandler(handle_template_selection))
 
-@web_app.route("/")
-def home():
-    return "Bot is running"
+# === Webhook установка при старте ===
+async def start_webhook():
+    await bot.delete_webhook(drop_pending_updates=True)
+    await bot.set_webhook(url=WEBHOOK_URL)
+    logging.info("✅ Webhook установлен")
 
-@web_app.route("/status")
-def status():
-    return {"status": "ok"}
-
-async def main():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("template", set_template))
-    app.add_handler(CallbackQueryHandler(handle_template_switch, pattern="choose_template"))
-    app.add_handler(CallbackQueryHandler(template_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    async def run_web():
-        web_app.run(host='0.0.0.0', port=PORT)
-
-    logging.info("Установка webhook...")
-    await app.bot.delete_webhook(drop_pending_updates=True)
-    await app.bot.set_webhook(url=WEBHOOK_URL + "/telegram")
-
-    await app.run_webhook(
-        listen="0.0.0.0",
-        port=PORT,
-        webhook_path="/telegram",
-        request_queue_size=10
-    )
-
-if __name__ == '__main__':
-    try:
-        asyncio.run(main())
-    except Exception as e:
-        logging.error(f"Ошибка запуска: {e}")
+# === Запуск ===
+if __name__ == "__main__":
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(start_webhook())
+    web_app.run(host="0.0.0.0", port=8080)
