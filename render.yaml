@@ -3,7 +3,6 @@ services:
     name: telegram-pdf-bot
     env: python
     plan: free
-    runtime: python
     buildCommand: pip install -r requirements.txt
     startCommand: python main.py
     envVars:
@@ -11,3 +10,5 @@ services:
         value: 7511704960:AAH-rIBOQkhzYvTVOp2tiodxzK3vp8GUiYM
       - key: WEBHOOK_URL
         value: https://telegram-pdf-bot-tqm5.onrender.com
+      - key: ADMIN_ID
+        value: 6587507343
