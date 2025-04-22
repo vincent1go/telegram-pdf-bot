@@ -3,20 +3,20 @@ import re
 import logging
 import pytz
 from datetime import datetime
-from telegram import Update, InputFile, ReplyKeyboardMarkup, ReplyKeyboardRemove, InlineKeyboardMarkup, InlineKeyboardButton
+from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (ApplicationBuilder, CommandHandler, MessageHandler,
                           ContextTypes, filters, CallbackQueryHandler)
 import fitz  # PyMuPDF
 from flask import Flask, request, abort
-from threading import Thread
-import time
 import asyncio
 
 # === Конфигурация ===
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
-if not TOKEN:
-    raise ValueError("BOT_TOKEN не установлен!")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+PORT = int(os.environ.get("PORT", 8080))
+if not TOKEN or not WEBHOOK_URL:
+    raise ValueError("Переменные BOT_TOKEN и WEBHOOK_URL должны быть заданы!")
 
 TEMPLATES = {
     "UR Recruitment LTD": "clean_template_no_text.pdf",
@@ -81,13 +81,8 @@ async def notify_admin(context, message):
 
 # === Обработчики Telegram ===
 async def set_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [
-        [InlineKeyboardButton(text=label, callback_data=label)] for label in TEMPLATES.keys()
-    ]
-    await update.message.reply_text(
-        "Выберите шаблон:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
+    keyboard = [[InlineKeyboardButton(text=label, callback_data=label)] for label in TEMPLATES.keys()]
+    await update.message.reply_text("Выберите шаблон:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def template_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
@@ -95,6 +90,12 @@ async def template_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     selected = query.data
     context.user_data['template'] = TEMPLATES[selected]
     await query.edit_message_text(f"Шаблон выбран: {selected}")
+
+async def handle_template_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    keyboard = [[InlineKeyboardButton(text=label, callback_data=label)] for label in TEMPLATES.keys()]
+    await query.edit_message_text("Выберите шаблон:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client_name = update.message.text.strip()
@@ -126,70 +127,40 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await notify_admin(context, f"Ошибка у {update.effective_user.id}: {e}")
         await update.message.reply_text("Произошла ошибка. Попробуйте позже.")
 
-async def handle_template_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    keyboard = [
-        [InlineKeyboardButton(text=label, callback_data=label)] for label in TEMPLATES.keys()
-    ]
-    await query.edit_message_text(
-        "Выберите шаблон:",
-        reply_markup=InlineKeyboardMarkup(keyboard)
-    )
-
-# === Flask сервер ===
+# === Flask сервер (Webhook endpoint) ===
 web_app = Flask(__name__)
 
-@web_app.before_request
-def limit_remote_addr():
-    if request.remote_addr not in ["127.0.0.1", "::1"]:
-        abort(403)
-
-@web_app.route('/')
+@web_app.route("/")
 def home():
     return "Bot is running"
 
-@web_app.route('/status')
+@web_app.route("/status")
 def status():
-    return {"status": "ok", "bot": "running"}
+    return {"status": "ok"}
 
-def run_flask():
-    while True:
-        try:
-            web_app.run(host='0.0.0.0', port=8080)
-        except Exception as e:
-            logging.error(f"Flask упал: {e}, перезапуск через 5 секунд")
-            time.sleep(5)
+async def main():
+    app = ApplicationBuilder().token(TOKEN).build()
+    app.add_handler(CommandHandler("template", set_template))
+    app.add_handler(CallbackQueryHandler(handle_template_switch, pattern="choose_template"))
+    app.add_handler(CallbackQueryHandler(template_callback))
+    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# === Основная логика запуска ===
-def run_bot():
+    async def run_web():
+        web_app.run(host='0.0.0.0', port=PORT)
+
+    logging.info("Установка webhook...")
+    await app.bot.delete_webhook(drop_pending_updates=True)
+    await app.bot.set_webhook(url=WEBHOOK_URL + "/telegram")
+
+    await app.run_webhook(
+        listen="0.0.0.0",
+        port=PORT,
+        webhook_path="/telegram",
+        request_queue_size=10
+    )
+
+if __name__ == '__main__':
     try:
-        app = ApplicationBuilder().token(TOKEN).build()
-        app.add_handler(CommandHandler("template", set_template))
-        app.add_handler(CallbackQueryHandler(handle_template_switch, pattern="choose_template"))
-        app.add_handler(CallbackQueryHandler(template_callback))
-        app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-        logging.info("Запуск Telegram бота...")
-        asyncio.run(app.run_polling())
+        asyncio.run(main())
     except Exception as e:
-        logging.error(f"Ошибка бота: {e}")
-
-def main():
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    while True:
-        try:
-            run_bot()
-        except Exception as e:
-            logging.error(f"Бот вылетел с ошибкой: {e}. Перезапуск через 5 секунд...")
-            time.sleep(5)
-
-if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        logging.info("Бот остановлен")
-    except Exception as e:
-        logging.error(f"Критическая ошибка: {e}")
-
-
+        logging.error(f"Ошибка запуска: {e}")
