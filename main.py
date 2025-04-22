@@ -6,11 +6,12 @@ from datetime import datetime
 from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton
 from telegram.ext import (
     ApplicationBuilder, CommandHandler, MessageHandler,
-    ContextTypes, filters, CallbackQueryHandler
+    ContextTypes, filters, CallbackQueryHandler, Application
 )
 import fitz  # PyMuPDF
 from flask import Flask, request
 import asyncio
+import threading
 
 # === Конфигурация ===
 TOKEN = os.getenv("BOT_TOKEN")
@@ -148,14 +149,11 @@ def home():
 
 @web_app.route(f'/{TOKEN}', methods=["POST"])
 def webhook():
-    from telegram import Update
-    from telegram.ext import Application
-
     update = Update.de_json(request.get_json(force=True), application.bot)
     asyncio.create_task(application.process_update(update))
     return "OK"
 
-# === Запуск бота с вебхуками ===
+# === Создание приложения Telegram ===
 application = ApplicationBuilder().token(TOKEN).build()
 application.add_handler(CommandHandler("start", start))
 application.add_handler(CommandHandler("template", set_template))
@@ -163,10 +161,11 @@ application.add_handler(CallbackQueryHandler(handle_template_switch, pattern="ch
 application.add_handler(CallbackQueryHandler(template_callback))
 application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-async def set_webhook():
+# === Главный запуск ===
+async def main():
     await application.bot.set_webhook(url=f"{WEBHOOK_URL}/{TOKEN}")
+    await asyncio.Event().wait()  # Бесконечное ожидание
 
 if __name__ == "__main__":
-    import threading
     threading.Thread(target=lambda: web_app.run(host="0.0.0.0", port=10000)).start()
-    asyncio.run(set_webhook())
+    asyncio.run(main())
