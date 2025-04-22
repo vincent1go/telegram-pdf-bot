@@ -1,46 +1,52 @@
-import fitz  # PyMuPDF
 import os
 import re
-from datetime import datetime
+import fitz  # PyMuPDF
 import pytz
+from datetime import datetime
 
-# 🎯 Путь к шаблонам PDF (если лежат в корне, ничего менять не нужно)
-TEMPLATES = {
-    "UR Recruitment LTD": "clean_template_no_text.pdf",
-    "SMALL WORLD RECRUITMENT LTD": "template_small_world.pdf"
-}
+# Цвет текста (тёмно-серый)
+COLOR = (69 / 255, 69 / 255, 69 / 255)
 
-# 🎨 Цвет текста (серый)
-TEXT_COLOR = (69 / 255, 69 / 255, 69 / 255)
-
-# 📍 Получить текущую дату по Лондону
-def get_london_date() -> str:
+def текущая_дата_лондон():
+    """Возвращает текущую дату в формате дд.мм.гггг (часовой пояс Лондона)"""
     return datetime.now(pytz.timezone("Europe/London")).strftime("%d.%m.%Y")
 
-# 🧽 Заменить текст на странице PDF
-def replace_text(page, old_text, new_text):
-    areas = page.search_for(old_text)
-    for area in areas:
-        page.add_redact_annot(area, fill=(1, 1, 1))  # белая заливка
+def очистить_имя_файла(text):
+    """Удаляет опасные символы из текста для имени файла"""
+    return re.sub(r"[^\w\s-]", "", text, flags=re.UNICODE).strip()
+
+def заменить_текст_на_странице(page, старый_текст, новый_текст):
+    """Находит текст на странице и заменяет его на новый"""
+    области = page.search_for(старый_текст)
+    for область in области:
+        page.add_redact_annot(область, fill=(1, 1, 1))  # закрасить белым
     page.apply_redactions()
-    for area in areas:
-        y_offset = 8 if "Date" in old_text else 0
+    for область in области:
+        смещение_y = 8 if "Date" in старый_текст else 0
         page.insert_text(
-            (area.x0, area.y0 + y_offset),
-            new_text,
+            (область.x0, область.y0 + смещение_y),
+            новый_текст,
             fontname="helv",
             fontsize=11,
-            color=TEXT_COLOR,
+            color=COLOR
         )
 
-# 📄 Генерация PDF по шаблону и тексту пользователя
-def generate_pdf(template_path: str, user_text: str) -> str:
-    safe_name = re.sub(r"[^\w\s-]", "", user_text, flags=re.UNICODE).strip()
-    output_path = f"{safe_name}.pdf"
-    doc = fitz.open(template_path)
+def generate_pdf(путь_к_шаблону: str, текст: str) -> str:
+    """
+    Заполняет PDF шаблон пользовательским текстом и сохраняет в файл.
+    :param путь_к_шаблону: Путь к PDF шаблону
+    :param текст: Текст пользователя (имя клиента, данные и т.д.)
+    :return: Путь к сгенерированному PDF
+    """
+    дата = текущая_дата_лондон()
+    имя_файла = очистить_имя_файла(текст) or "результат"
+    путь_к_выходному_файлу = f"{имя_файла}.pdf"
+
+    doc = fitz.open(путь_к_шаблону)
     for page in doc:
-        replace_text(page, "Client:", f"Client: {user_text}")
-        replace_text(page, "Date:", f"Date: {get_london_date()}")
-    doc.save(output_path, garbage=4, deflate=True, clean=True)
+        заменить_текст_на_странице(page, "Client:", f"Client: {текст}")
+        заменить_текст_на_странице(page, "Date:", f"Date: {дата}")
+    doc.save(путь_к_выходному_файлу, garbage=4, deflate=True, clean=True)
     doc.close()
-    return output_path
+
+    return путь_к_выходному_файлу
