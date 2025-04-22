@@ -6,15 +6,15 @@ from datetime import datetime
 from telegram import Update, InputFile, InlineKeyboardMarkup, InlineKeyboardButton, Bot
 from telegram.ext import ApplicationBuilder, CommandHandler, MessageHandler, ContextTypes, CallbackQueryHandler, filters
 import fitz  # PyMuPDF
-from flask import Flask, request, abort
+from flask import Flask, request
 from threading import Thread
-import time
 import asyncio
 
 # === Конфигурация ===
 TOKEN = os.getenv("BOT_TOKEN")
 ADMIN_ID = os.getenv("ADMIN_ID")
 WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+PORT = int(os.environ.get("PORT", "8080"))
 
 TEMPLATES = {
     "UR Recruitment LTD": "clean_template_no_text.pdf",
@@ -22,17 +22,13 @@ TEMPLATES = {
 }
 
 COLOR = (69/255, 69/255, 69/255)
-
 bot = Bot(token=TOKEN)
 
 # === Логирование ===
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s',
-    handlers=[
-        logging.FileHandler("bot.log"),
-        logging.StreamHandler()
-    ]
+    format="%(asctime)s - %(levelname)s - %(message)s",
+    handlers=[logging.StreamHandler()]
 )
 
 # === Вспомогательные функции ===
@@ -48,9 +44,7 @@ def replace_text(page, old_text, new_text):
         y_offset = 11 if "Date" in old_text else 0
         page.insert_text(
             (area.x0, area.y0 + y_offset), new_text,
-            fontname="helv",
-            fontsize=11,
-            color=COLOR
+            fontname="helv", fontsize=11, color=COLOR
         )
 
 def fill_pdf_template(template_path, output_path, client_name, date_str):
@@ -68,9 +62,9 @@ async def notify_admin(context, message):
         except Exception as e:
             logging.error(f"Ошибка уведомления админа: {e}")
 
-# === Telegram handlers ===
+# === Telegram Handlers ===
 async def set_template(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    keyboard = [[InlineKeyboardButton(text=label, callback_data=label)] for label in TEMPLATES.keys()]
+    keyboard = [[InlineKeyboardButton(t, callback_data=t)] for t in TEMPLATES.keys()]
     await update.message.reply_text("Выберите шаблон:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def template_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -83,76 +77,65 @@ async def template_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def handle_template_switch(update: Update, context: ContextTypes.DEFAULT_TYPE):
     query = update.callback_query
     await query.answer()
-    keyboard = [[InlineKeyboardButton(text=label, callback_data=label)] for label in TEMPLATES.keys()]
+    keyboard = [[InlineKeyboardButton(t, callback_data=t)] for t in TEMPLATES.keys()]
     await query.edit_message_text("Выберите шаблон:", reply_markup=InlineKeyboardMarkup(keyboard))
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     client_name = update.message.text.strip()
-    if not client_name:
-        await update.message.reply_text("Пожалуйста, введите имя клиента.")
-        return
-
     try:
-        safe_name = re.sub(r'[^\w\s\-\u0400-\u04FF]', '', client_name).strip()
+        safe_name = re.sub(r"[^\w\s\-\u0400-\u04FF]", "", client_name).strip()
         template_path = context.user_data.get("template")
         if not template_path:
-            keyboard = [[InlineKeyboardButton(text=label, callback_data=label)] for label in TEMPLATES.keys()]
-            await update.message.reply_text("Пожалуйста, выберите шаблон:", reply_markup=InlineKeyboardMarkup(keyboard))
+            keyboard = [[InlineKeyboardButton(t, callback_data=t)] for t in TEMPLATES.keys()]
+            await update.message.reply_text("Сначала выберите шаблон:", reply_markup=InlineKeyboardMarkup(keyboard))
             return
-
         output_path = f"{safe_name}.pdf"
         fill_pdf_template(template_path, output_path, safe_name, get_london_date())
-
         with open(output_path, "rb") as f:
             await update.message.reply_document(document=InputFile(f, filename=output_path))
-
-        keyboard = [[InlineKeyboardButton("Выбрать другой шаблон", callback_data="choose_template")]]
         await update.message.reply_text(
             f"Договор на имя \"{client_name}\" сгенерирован.",
-            reply_markup=InlineKeyboardMarkup(keyboard)
+            reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("Выбрать другой шаблон", callback_data="choose_template")]])
         )
-
         os.remove(output_path)
-        logging.info(f"PDF создан для: {client_name}")
     except Exception as e:
-        logging.error(f"Ошибка генерации: {e}")
+        logging.error(f"Ошибка: {e}")
         await notify_admin(context, f"Ошибка у {update.effective_user.id}: {e}")
         await update.message.reply_text("Произошла ошибка. Попробуйте позже.")
 
-# === Flask + Webhook ===
+# === Flask сервер ===
 web_app = Flask(__name__)
+telegram_app = None  # Здесь позже инициализируем Application
 
 @web_app.route("/")
-def home():
-    return "OK"
+def index():
+    return "Бот запущен!"
 
 @web_app.route("/telegram", methods=["POST"])
-def telegram_webhook():
-    update = Update.de_json(request.get_json(force=True), bot)
-    asyncio.run(app.process_update(update))
+def webhook():
+    if telegram_app:
+        update = Update.de_json(request.get_json(force=True), bot)
+        telegram_app.create_task(telegram_app.process_update(update))
     return "ok"
 
-def run_flask():
-    web_app.run(host="0.0.0.0", port=8080)
-
-# === Основной запуск ===
+# === Запуск Flask + Telegram ===
 async def main():
-    global app
-    app = ApplicationBuilder().token(TOKEN).build()
+    global telegram_app
+    telegram_app = ApplicationBuilder().token(TOKEN).build()
 
-    app.add_handler(CommandHandler("template", set_template))
-    app.add_handler(CallbackQueryHandler(template_callback))
-    app.add_handler(CallbackQueryHandler(handle_template_switch, pattern="choose_template"))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
+    telegram_app.add_handler(CommandHandler("template", set_template))
+    telegram_app.add_handler(CallbackQueryHandler(template_callback))
+    telegram_app.add_handler(CallbackQueryHandler(handle_template_switch, pattern="choose_template"))
+    telegram_app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
     await bot.set_webhook(f"{WEBHOOK_URL}/telegram")
     logging.info("Webhook установлен.")
 
-    flask_thread = Thread(target=run_flask, daemon=True)
+    flask_thread = Thread(target=lambda: web_app.run(host="0.0.0.0", port=PORT), daemon=True)
     flask_thread.start()
 
-    logging.info("Бот запущен через webhook")
-    await asyncio.Event().wait()  # Ожидание бесконечно
+    logging.info("Бот работает через вебхуки. Ожидаем события...")
+    await asyncio.Event().wait()
 
 if __name__ == "__main__":
     try:
