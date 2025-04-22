@@ -9,16 +9,16 @@ from telegram.ext import (
     ContextTypes, filters, CallbackQueryHandler
 )
 import fitz  # PyMuPDF
-from flask import Flask, request, abort
-from threading import Thread
-import time
+from flask import Flask, request
 import asyncio
 
 # === Конфигурация ===
 TOKEN = os.getenv("BOT_TOKEN")
-ADMIN_ID = os.getenv("ADMIN_ID")  # Задай через Secrets в Replit
-if not TOKEN:
-    raise ValueError("BOT_TOKEN не установлен!")
+WEBHOOK_URL = os.getenv("WEBHOOK_URL")
+ADMIN_ID = os.getenv("ADMIN_ID")
+
+if not TOKEN or not WEBHOOK_URL:
+    raise ValueError("BOT_TOKEN и WEBHOOK_URL должны быть заданы в переменных окружения!")
 
 TEMPLATES = {
     "UR Recruitment LTD": "clean_template_no_text.pdf",
@@ -101,7 +101,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     try:
-        safe_name = re.sub(r'[^\w\s-]', '', client_name, flags=re.UNICODE).strip()
+        safe_name = re.sub(r'[^Ѐ-ӿ\w\s-]', '', client_name, flags=re.UNICODE).strip()
         if not safe_name:
             await update.message.reply_text("Имя клиента содержит недопустимые символы.")
             return
@@ -142,60 +142,31 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # === Flask-сервер ===
 web_app = Flask(__name__)
 
-@web_app.before_request
-def limit_remote_addr():
-    if request.remote_addr not in ["127.0.0.1", "::1"]:
-        abort(403)
-
 @web_app.route('/')
 def home():
     return "Bot is running"
 
-@web_app.route('/status')
-def status():
-    return {"status": "ok", "bot": "running"}
+@web_app.route(f'/{TOKEN}', methods=["POST"])
+def webhook():
+    from telegram import Update
+    from telegram.ext import Application
 
-@web_app.route("/git-sync", methods=["POST"])
-def git_sync():
-    logging.info("Получен webhook от GitHub — инициирую перезапуск.")
-    with open(".replit", "a") as f:
-        pass
-    return {"status": "restarted"}, 200
+    update = Update.de_json(request.get_json(force=True), application.bot)
+    asyncio.create_task(application.process_update(update))
+    return "OK"
 
-def run_flask():
-    while True:
-        try:
-            web_app.run(host='0.0.0.0', port=8080)
-        except Exception as e:
-            logging.error(f"Flask упал: {e}, перезапуск через 5 секунд")
-            time.sleep(5)
+# === Запуск бота с вебхуками ===
+application = ApplicationBuilder().token(TOKEN).build()
+application.add_handler(CommandHandler("start", start))
+application.add_handler(CommandHandler("template", set_template))
+application.add_handler(CallbackQueryHandler(handle_template_switch, pattern="choose_template"))
+application.add_handler(CallbackQueryHandler(template_callback))
+application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
 
-# === Основной запуск ===
-def run_bot():
-    app = ApplicationBuilder().token(TOKEN).build()
-    app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("template", set_template))
-    app.add_handler(CallbackQueryHandler(handle_template_switch, pattern="choose_template"))
-    app.add_handler(CallbackQueryHandler(template_callback))
-    app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_message))
-
-    logging.info("Бот запущен")
-    asyncio.run(app.run_polling())
-
-def main():
-    flask_thread = Thread(target=run_flask, daemon=True)
-    flask_thread.start()
-    while True:
-        try:
-            run_bot()
-        except Exception as e:
-            logging.error(f"Бот упал: {e}. Перезапуск через 5 секунд...")
-            time.sleep(5)
+async def set_webhook():
+    await application.bot.set_webhook(url=f"{WEBHOOK_URL}/{TOKEN}")
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        logging.info("Остановка по Ctrl+C")
-    except Exception as e:
-        logging.error(f"Критическая ошибка: {e}")
+    import threading
+    threading.Thread(target=lambda: web_app.run(host="0.0.0.0", port=10000)).start()
+    asyncio.run(set_webhook())
