@@ -124,6 +124,7 @@ async def main():
 
     await telegram_app.bot.set_webhook(url=WEBHOOK_URL)
     Thread(target=run_flask, daemon=True).start()
+    await telegram_app.initialize()
     await telegram_app.start()
     await telegram_app.updater.start_polling()
     await telegram_app.updater.idle()
