@@ -106,7 +106,15 @@ async def receive_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         filename = f"{client_name}.pdf"
         with open(pdf_path, "rb") as f:
             await update.message.reply_document(document=f, filename=filename)
-        await update.message.reply_text("✅ Документ успешно создан!")
+
+        keyboard = [
+            [InlineKeyboardButton("📄 Сменить шаблон", callback_data="select_template")],
+            [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
+        ]
+        await update.message.reply_text(
+            "✅ Документ успешно создан!\n\nЧто дальше?",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
     except Exception as e:
         logger.error(f"Ошибка генерации PDF: {e}")
         await update.message.reply_text("❌ Ошибка при создании PDF.")
@@ -160,3 +168,4 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
+
