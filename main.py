@@ -80,7 +80,7 @@ async def template_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         f"✅ Шаблон выбран: *{name}*\n\nВведите имя клиента:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
-            [InlineKeyboardButton("🔄 Сначала", callback_data="select_template")],
+            [InlineKeyboardButton("🔄 Сменить шаблон", callback_data="select_template")],
             [InlineKeyboardButton("❌ Отмена", callback_data="cancel")],
         ])
     )
@@ -95,11 +95,12 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     ]))
 
 async def receive_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    if context.user_data.get("state") != ENTERING_TEXT:
+    if "template" not in context.user_data:
         await update.message.reply_text("Сначала выберите шаблон через меню.")
         return
-    template_name = context.user_data["template"]
+
     client_name = update.message.text.strip()
+    template_name = context.user_data["template"]
     try:
         template_path = config.TEMPLATES[template_name]
         pdf_path = generate_pdf(template_path, client_name)
@@ -112,13 +113,12 @@ async def receive_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
         ]
         await update.message.reply_text(
-            "✅ Документ успешно создан!\n\nЧто дальше?",
+            "✅ Документ успешно создан!\n\nМожете отправить новое имя клиента для генерации ещё одного PDF.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     except Exception as e:
         logger.error(f"Ошибка генерации PDF: {e}")
         await update.message.reply_text("❌ Ошибка при создании PDF.")
-    context.user_data.clear()
 
 # === Webhook ===
 
@@ -168,4 +168,3 @@ async def main():
 
 if __name__ == "__main__":
     asyncio.run(main())
-
