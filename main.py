@@ -13,17 +13,16 @@ from pdf_generator import generate_pdf
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === Состояния пользователя ===
+# === Состояния ===
 SELECTING_TEMPLATE = 1
 ENTERING_TEXT = 2
 
-# === Обработчики Telegram ===
+# === Обработчики ===
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = (
         "👋 *Добро пожаловать в PDF-бот!*\n\n"
-        "Этот бот поможет создать PDF-документ на основе шаблона.\n"
-        "Выберите шаблон, введите текст — и получите готовый файл! 📄"
+        "Выберите шаблон, введите имя клиента — и получите PDF-файл 📄"
     )
     keyboard = [
         [
@@ -40,7 +39,7 @@ async def about(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "ℹ️ *О боте*\n\n"
         "Бот генерирует PDF-документы на основе шаблонов.\n"
         "Автор: @vincent1go\n"
-        "[Исходник на GitHub](https://github.com/vincent1go/telegram-pdf-bot)"
+        "[GitHub](https://github.com/vincent1go/telegram-pdf-bot)"
     )
     keyboard = [[InlineKeyboardButton("🏠 Назад", callback_data="main_menu")]]
     await query.message.edit_text(message, parse_mode="Markdown", reply_markup=InlineKeyboardMarkup(keyboard))
@@ -78,7 +77,7 @@ async def template_selected(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     context.user_data["template"] = name
     context.user_data["state"] = ENTERING_TEXT
     await query.message.edit_text(
-        f"✅ Шаблон выбран: *{name}*\n\nВведите текст, который нужно вставить в шаблон:",
+        f"✅ Шаблон выбран: *{name}*\n\nВведите имя клиента:",
         parse_mode="Markdown",
         reply_markup=InlineKeyboardMarkup([
             [InlineKeyboardButton("🔄 Сначала", callback_data="select_template")],
@@ -100,19 +99,20 @@ async def receive_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await update.message.reply_text("Сначала выберите шаблон через меню.")
         return
     template_name = context.user_data["template"]
-    text = update.message.text
+    client_name = update.message.text.strip()
     try:
         template_path = config.TEMPLATES[template_name]
-        pdf_path = generate_pdf(template_path, text)
+        pdf_path = generate_pdf(template_path, client_name)
+        filename = f"{client_name}.pdf"
         with open(pdf_path, "rb") as f:
-            await update.message.reply_document(document=f, filename="document.pdf")
+            await update.message.reply_document(document=f, filename=filename)
         await update.message.reply_text("✅ Документ успешно создан!")
     except Exception as e:
         logger.error(f"Ошибка генерации PDF: {e}")
         await update.message.reply_text("❌ Ошибка при создании PDF.")
     context.user_data.clear()
 
-# === Вебхуки через aiohttp ===
+# === Webhook ===
 
 async def handle_webhook(request):
     try:
