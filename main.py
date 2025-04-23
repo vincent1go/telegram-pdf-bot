@@ -9,15 +9,11 @@ from telegram.ext import (
 import config
 from pdf_generator import generate_pdf
 
-# === Логирование ===
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# === Состояния ===
 SELECTING_TEMPLATE = 1
 ENTERING_TEXT = 2
-
-# === Обработчики ===
 
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     message = (
@@ -96,7 +92,11 @@ async def cancel(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def receive_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if "template" not in context.user_data:
-        await update.message.reply_text("Сначала выберите шаблон через меню.")
+        keyboard = [[InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]]
+        await update.message.reply_text(
+            "⚠️ Сначала выберите шаблон через меню.",
+            reply_markup=InlineKeyboardMarkup(keyboard)
+        )
         return
 
     client_name = update.message.text.strip()
@@ -113,7 +113,7 @@ async def receive_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             [InlineKeyboardButton("🏠 Главное меню", callback_data="main_menu")]
         ]
         await update.message.reply_text(
-            "✅ Документ успешно создан!\n\nМожете отправить новое имя клиента для генерации ещё одного PDF.",
+            "✅ Документ успешно создан!\n\nМожете ввести другое имя клиента, и бот снова создаст PDF.",
             reply_markup=InlineKeyboardMarkup(keyboard)
         )
     except Exception as e:
