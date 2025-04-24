@@ -71,9 +71,9 @@ def generate_pdf(путь_к_шаблону: str, текст: str) -> str:
                 заменить_текст_на_странице(page, "Date: ", f"Date: {дата}", is_date=True)
         else:
             if page.number == 0:
-                page.insert_text((72, 100), f"Client: {текст}", fontname="helv", fontsize=11, color=COLOR)
+                заменить_текст_на_странице(page, "Client: ", f"Client: {текст}")
             if page.number == 4:
-                page.insert_text((72, 700), f"Date: {дата}", fontname="helv", fontsize=11, color=COLOR)
+                заменить_текст_на_странице(page, "Date: ", f"Date: {дата}", is_date=True)
 
     try:
         doc.save(путь_к_выходному_файлу, garbage=4, deflate=True, clean=True)
@@ -85,3 +85,4 @@ def generate_pdf(путь_к_шаблону: str, текст: str) -> str:
         doc.close()
 
     return путь_к_выходному_файлу
+
