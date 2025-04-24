@@ -13,8 +13,8 @@ logger = logging.getLogger(__name__)
 COLOR = (69 / 255, 69 / 255, 69 / 255)
 
 def текущая_дата_лондон():
-    """Возвращает текущую дату в формате дд.мм.гггг (часовой пояс Лондона)"""
-    return datetime.now(pytz.timezone("Europe/London")).strftime("%d.%m.%Y")
+    """Возвращает текущую дату в формате дд.мм.гггг (часовой пояс Киева)"""
+    return datetime.now(pytz.timezone("Europe/Kiev")).strftime("%d.%m.%Y")
 
 def очистить_имя_файла(text):
     """Удаляет опасные символы из текста для имени файла"""
